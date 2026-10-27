@@ -1,0 +1,110 @@
+{
+  "points_min": {
+    "type": "int",
+    "description": "签到基础积分下限",
+    "default": 1,
+    "hint": "每次签到首先随机取 points_min ~ points_max 之间的整数作为基础分，默认 1"
+  },
+  "points_max": {
+    "type": "int",
+    "description": "签到基础积分上限",
+    "default": 10,
+    "hint": "默认 10；与下限填反了插件会自动交换，不会崩"
+  },
+  "first_checkin_bonus": {
+    "type": "int",
+    "description": "每日首签额外奖励",
+    "default": 5,
+    "hint": "当天本群第一个签到的人额外加分，在暴击结算之后叠加（不参与暴击），填 0 关闭"
+  },
+  "streak_bonus_start": {
+    "type": "int",
+    "description": "连签加成从第几天开始",
+    "default": 3,
+    "hint": "默认从连签第 3 天开始享受加成"
+  },
+  "streak_bonus_per_day": {
+    "type": "float",
+    "description": "连签加成每天递增多少（相对基础分）",
+    "default": 0.1,
+    "hint": "默认 0.1，即从起始日起每天 +10% 基础分"
+  },
+  "streak_bonus_max": {
+    "type": "float",
+    "description": "连签加成上限（相对基础分）",
+    "default": 1.0,
+    "hint": "默认 1.0，即加成最多 +100%（基础分翻倍）"
+  },
+  "crit_enabled": {
+    "type": "bool",
+    "description": "启用签到暴击",
+    "default": true
+  },
+  "crit_chance": {
+    "type": "float",
+    "description": "暴击概率（单档模式）",
+    "default": 0.05,
+    "hint": "默认 0.05 表示 5% 概率暴击；填 0 永不暴击，填 1 必定暴击"
+  },
+  "crit_multiplier": {
+    "type": "float",
+    "description": "暴击倍率（单档模式）",
+    "default": 3,
+    "hint": "默认 3，命中时 (基础分 + 连签加成) × 3 后向下取整"
+  },
+  "crit_tiers": {
+    "type": "list",
+    "description": "多档暴击（可选，配置后覆盖上面的单档概率/倍率）",
+    "default": [],
+    "hint": "示例：[{\"chance\":0.05,\"multiplier\":3},{\"chance\":0.01,\"multiplier\":10}]；按倍率从高到低判定，命中即止，不叠加"
+  },
+  "crit_message": {
+    "type": "string",
+    "description": "暴击文案模板",
+    "default": "💥 暴击 ×{multiplier}！本次 +{points} 分",
+    "hint": "可用占位符：{multiplier} 倍率、{points} 本次总分、{subtotal} 暴击前分数、{base} 基础分、{streak_bonus} 连签加成、{streak} 连签天数"
+  },
+  "leaderboard_limit": {
+    "type": "int",
+    "description": "排行榜默认显示条数",
+    "default": 10,
+    "hint": "上限 10，超出自动收敛"
+  },
+  "leaderboard_scope": {
+    "type": "string",
+    "description": "排行榜默认口径",
+    "default": "group",
+    "hint": "group = 只看本群（默认），global = 跨群全局汇总"
+  },
+  "timezone": {
+    "type": "string",
+    "description": "计算“今天”所用的时区",
+    "default": "Asia/Shanghai",
+    "hint": "默认 Asia/Shanghai，跨天判断、每日首签都按这个时区算"
+  },
+  "keyword_enable": {
+    "type": "bool",
+    "description": "允许不带斜杠直接发“签到/打卡”触发",
+    "default": true
+  },
+  "allow_private": {
+    "type": "bool",
+    "description": "允许私聊签到",
+    "default": false
+  },
+  "enable_image_rank": {
+    "type": "bool",
+    "description": "排行榜输出图片（需要 Pillow 和中文字体，失败自动回退文本）",
+    "default": false
+  },
+  "group_whitelist": {
+    "type": "list",
+    "description": "群白名单（留空表示所有群可用）",
+    "default": []
+  },
+  "group_blacklist": {
+    "type": "list",
+    "description": "群黑名单",
+    "default": []
+  }
+}

@@ -1,0 +1,11 @@
+name: astrbot_plugin_checkin
+display_name: 每日签到
+desc: 群签到 + 积分 + 连签 + 暴击 + 排行榜（今日榜/总榜/连签榜，支持本群与全局口径）
+version: v1.1.0
+author: dian-dian233
+repo: https://github.com/dian-dian233/astrbot_plugin_checkin
+tags:
+  - 签到
+  - 积分
+  - 排行榜
+  - 娱乐
