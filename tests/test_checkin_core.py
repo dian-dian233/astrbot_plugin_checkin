@@ -415,6 +415,19 @@ class TestArgsAndText(StoreCase):
         result = store.checkin("g1", "u1")
         self.assertNotIn("暴击", format_checkin_reply(settings, result))
 
+    def test_success_reply_is_single_line(self):
+        """「少即是多」：签到成功回执只留一行，不再刷积分数值/明细。"""
+        settings = make_settings(crit_chance=0.0)
+        store = CheckinStore(self.db_path, settings, rng=SeqRng([0.99], int_value=5))
+        store.init_db()
+        result = store.checkin("g1", "u1")
+        reply = format_checkin_reply(settings, result, "阿一")
+        self.assertEqual(reply.count("\n"), 0)          # 只有一行
+        self.assertIn("签到成功", reply)
+        self.assertIn("累计", reply)
+        for gone in ("基础", "首签", "加成", "今日第", "🎯", "🎁", "🏅"):
+            self.assertNotIn(gone, reply)
+
     def test_reset_group_clears_only_that_group(self):
         store = self.new_store(rng=SeqRng([0.99], int_value=5))
         store.checkin("g1", "u1")

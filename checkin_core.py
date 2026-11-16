@@ -1074,26 +1074,18 @@ def render_crit_line(settings: Settings, result: CheckinResult) -> str:
 
 def format_checkin_reply(settings: Settings, result: CheckinResult,
                          display_name: str = "") -> str:
-    """签到回执（纯文本，方便单测）。"""
-    lines = []
+    """签到回执（纯文本，方便单测）。
+
+    「少即是多」：整条回执压成一行 —— 签到成功 + 本次得分（暴击时附暴击文案）
+    + 连签 + 累计积分。基础分/连签加成明细、首签奖励、今日排名等明细不再输出。
+    """
     name = display_name or result.user_id
-    lines.append("✅ %s 签到成功！%s" % (name, result.day))
-    if result.first_bonus:
-        lines.append("🎁 今日首签奖励 +%d 分" % result.first_bonus)
-    calc = "🎯 基础 %d" % result.base_points
-    if result.streak_bonus:
-        calc += " + 连签加成 %d" % result.streak_bonus
-    calc += " = %d" % result.subtotal
-    lines.append(calc)
     if result.is_crit:
-        lines.append(render_crit_line(settings, result))  # 暴击行已含本次得分
+        gain = render_crit_line(settings, result)
     else:
-        lines.append("✨ 本次 +%d 分" % result.points)
-    tail = ["🔥 连签 %d 天" % result.streak, "📈 累计 %d 分" % result.total_points]
-    if result.rank:
-        tail.append("🏅 今日第 %d 名" % result.rank)
-    lines.append(" | ".join(tail))
-    return "\n".join(lines)
+        gain = "本次 +%d 分" % result.points
+    return "✅ %s 签到成功！%s｜🔥 连签 %d 天｜📈 累计 %d 分" % (
+        name, gain, result.streak, result.total_points)
 
 
 def format_board(result: BoardResult, settings: Optional[Settings] = None) -> str:

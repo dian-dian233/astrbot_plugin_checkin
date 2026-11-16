@@ -315,14 +315,11 @@ class CheckinPlugin(Star):
 
     # ------------------------------------------------------------ 签到消息
     def _format_success(self, res, scope: str, name: str = "") -> str:
-        """文案统一由 checkin_core 渲染，暴击行也在里面，方便配置与自测。"""
-        text = format_checkin_reply(self.settings, res, name)
-        try:
-            total = self.store.day_count(scope)
-            text += "\n🏁 今日已有 %d 人签到" % total
-        except Exception:
-            pass
-        return text
+        """签到成功只回一行核心反馈（文案由 checkin_core 渲染，方便配置与自测）。
+
+        「少即是多」：不再追加“今日已有 N 人签到”等附加统计，避免刷屏。
+        """
+        return format_checkin_reply(self.settings, res, name)
 
     def _format_already(self, stats, scope: str) -> str:
         total = self.store.day_count(scope)

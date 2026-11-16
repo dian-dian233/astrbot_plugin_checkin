@@ -165,6 +165,13 @@ class TestCommands(PluginCase):
         text = self.reply(self.plugin.on_keyword(FakeEvent("签到")))
         self.assertIn("签到成功", text)
 
+    def test_success_reply_is_compact(self):
+        """签到成功只回一两条，不带“今日已有 N 人签到”这类附加统计。"""
+        text = self.reply(self.plugin.cmd_checkin(FakeEvent("/签到")))
+        self.assertLessEqual(len(text.strip().splitlines()), 2)
+        self.assertIn("签到成功", text)
+        self.assertNotIn("今日已有", text)
+
     def test_leaderboard_today_text_and_image_fallback(self):
         run_agen(self.plugin.cmd_checkin(FakeEvent("/签到")))  # 先有数据
         text = self.reply(self.plugin.cmd_leaderboard(FakeEvent("/签到榜 today")))
