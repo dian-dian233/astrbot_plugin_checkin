@@ -78,6 +78,45 @@ store = CheckinStore(db_path, settings, rng=random.Random(42))  # 或 seed=42
 
 ---
 
+## 💬 签到成功回复的呈现方式（`success_reply_style`）
+
+签到**成功**的那条回复可以选三种花样：普通文本、@ 发起人、引用发起人的签到消息。默认保持老样子（普通文本），不配置就什么都没变。
+
+| 取值 | 效果 | 发出去的样子 |
+| --- | --- | --- |
+| `text`（默认） | 只发纯文本 | `✅ 阿一 签到成功！本次 +21 分｜🔥 连签 4 天｜📈 累计 88 分` |
+| `at` | 回复里 **@ 签到的人** | `[@阿一] ✅ 签到成功！本次 +21 分｜🔥 连签 4 天｜📈 累计 88 分` |
+| `quote` | **引用/回复**用户那条签到消息 | `> 引用：/签到` + `✅ 阿一 签到成功！...` |
+| `both` | @ + 引用都加上 | 上面两个一起 |
+
+- 只想普通文本（= 两种都关）：填 `text`，或 `none` / `off` / `关闭`，都认。
+- 别名也认：`plain`→text、`@`/`mention`/`艾特`→at、`reply`/`引用`/`回复`→quote、`at+quote`/`all`→both；写错（比如 `火星模式`）自动回落到 `text`，不会报错、不会静默失联。
+- 改完即时生效（不用重载插件）。
+- **只有「签到成功」这一条会被装饰**；重复签到提示、`/我的签到`、排行榜、`/签到重置` 的输出都还是纯文本。
+
+实现方式直接对齐 AstrBot 框架自己的做法（`astrbot/core/pipeline/result_decorate/stage.py`，v4.29.3）：
+
+```python
+# @ 回复
+result.chain.insert(0, At(qq=event.get_sender_id(), name=event.get_sender_name()))
+# 引用回复
+result.chain.insert(0, Reply(id=event.message_obj.message_id))
+```
+
+所以插件里也是：
+
+```python
+At(qq=event.get_sender_id(), name=event.get_sender_name())   # 带真实 userid，不是纯文本昵称
+Reply(id=event.message_obj.message_id)                        # 引用那条签到消息
+```
+
+消息链顺序按 OneBot v11 习惯排 `[Reply] [At] [Plain]`；`at` 模式下正文不再重复写昵称（@ 已经点出来了）。
+任何一步拿不到东西（平台不给 `message_id`、AstrBot 版本没有 `At`/`Reply` 段）都**自动回退纯文本**，不会抛异常、不会丢回执。
+
+> ⚠️ AstrBot 全局还有个 `platform_settings.reply_with_mention` / `platform_settings.reply_with_quote`，那是**对所有**回复生效的。本插件这个配置只管签到成功那一条。如果全局已经开了，这里建议保持 `text`，否则可能出现重复 @ / 重复引用。
+
+---
+
 ## 🏆 排行榜
 
 | 指令 | 榜单 | 排序依据 |
@@ -124,6 +163,7 @@ store = CheckinStore(db_path, settings, rng=random.Random(42))  # 或 seed=42
 | `crit_multiplier` | float | `3` | 暴击倍率（单档） |
 | `crit_tiers` | list | `[]` | 多档暴击，非空则覆盖单档 |
 | `crit_message` | string | `💥 暴击 ×{multiplier}！本次 +{points} 分` | 暴击文案模板 |
+| `success_reply_style` | string | `text` | 签到成功回复呈现方式：`text`（纯文本，默认）/ `at`（@ 发起人）/ `quote`（引用其签到消息）/ `both`（都加） |
 | `leaderboard_limit` | int | `10` | 榜单默认条数（上限 10） |
 | `leaderboard_scope` | string | `group` | 榜单默认口径：`group` / `global` |
 | `timezone` | string | `Asia/Shanghai` | 算「今天」用的时区 |
@@ -161,7 +201,8 @@ python3 -m unittest discover -s tests -v
 
 覆盖：暴击概率 0 / 1 的边界、多档不重复叠加、多档统计分布、公式取整、首签叠加顺序、
 唯一索引防重复、Asia/Shanghai 跨天、三个榜单与并列名次、空榜提示、全局/本群口径、
-参数校验、管理员门禁、LLM 工具参数校验、老库自动补列、配置默认值与文档一致。
+参数校验、管理员门禁、LLM 工具参数校验、老库自动补列、配置默认值与文档一致、
+`success_reply_style` 四种取值（At 段 userid / Reply 段 message_id / 链顺序 / 缺 ID 回退 / 别名收敛）。
 
 ---
 
@@ -176,6 +217,11 @@ python3 -m unittest discover -s tests -v
 
 ## 📄 变更记录
 
+- **v1.3.0**：新增配置项 `success_reply_style` —— 签到成功回复可切换呈现方式：
+  `text`（纯文本，默认，与旧版一致）/ `at`（@ 发起人，At 段带真实 userid）/
+  `quote`（引用发起人的签到消息，Reply 段）/ `both`（两者都加）。只改「签到成功回复」
+  的消息构造，积分/连签/暴击/三个排行榜、`checkin_leaderboard`、`checkin_my_status` 行为完全未变；
+  取不到 `message_id` 或缺少消息段时自动回退纯文本
 - **v1.2.0**：签到成功回执瘦身（「少即是多」）—— 只保留一行核心反馈：签到成功 + 本次得分
   （暴击时带暴击文案）+ 连签 + 累计积分；不再输出基础分/加成明细、首签奖励、今日排名与
   「今日已有 N 人签到」。积分累计、连签、暴击、三个排行榜、`checkin_leaderboard`、

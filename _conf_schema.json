@@ -64,6 +64,20 @@
     "default": "💥 暴击 ×{multiplier}！本次 +{points} 分",
     "hint": "可用占位符：{multiplier} 倍率、{points} 本次总分、{subtotal} 暴击前分数、{base} 基础分、{streak_bonus} 连签加成、{streak} 连签天数"
   },
+  "success_reply_style": {
+    "type": "string",
+    "description": "签到成功回复的呈现方式",
+    "default": "text",
+    "options": ["text", "at", "quote", "both"],
+    "labels": ["纯文本（保持现状）", "艾特发起人（@）", "引用回复", "艾特 + 引用"],
+    "subtitles": [
+      "只发一行纯文本，不带 @ 也不引用",
+      "回复里 @ 签到的人（带真实 userid 的 At 段）",
+      "引用/回复用户那条签到消息（Reply 段）",
+      "既 @ 又引用"
+    ],
+    "hint": "text = 普通文本回复（默认，与旧版本一致）；at = @ 发起人；quote = 引用发起人的签到消息；both = 两者都加。改完即时生效。若已在 AstrBot 全局设置里开启 platform_settings.reply_with_mention / reply_with_quote，这里建议保持 text，避免重复 @ 或重复引用"
+  },
   "leaderboard_limit": {
     "type": "int",
     "description": "排行榜默认显示条数",

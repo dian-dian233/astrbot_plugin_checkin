@@ -47,6 +47,28 @@ except Exception:  # pragma: no cover - 老版本没有该导出时降级到 fil
             return _deco
 
 
+# 消息段（At / Reply / Plain）：AstrBot v4 从 astrbot.api.message_components 导出，
+# 等价于 astrbot.core.message.components 的 *（见 astrbot/api/message_components.py）。
+# 拿不到时降级为 None，签到成功回复退回纯文本，绝不让插件因缺段类型而崩。
+try:
+    from astrbot.api.message_components import At as AtComponent
+    from astrbot.api.message_components import Plain as PlainComponent
+    from astrbot.api.message_components import Reply as ReplyComponent
+except Exception:  # pragma: no cover - 老版本 / 精简环境
+    try:
+        from astrbot.core.message.components import At as AtComponent  # type: ignore[no-redef]
+        from astrbot.core.message.components import Plain as PlainComponent  # type: ignore[no-redef]
+        from astrbot.core.message.components import Reply as ReplyComponent  # type: ignore[no-redef]
+    except Exception:
+        AtComponent = None  # type: ignore[assignment]
+        PlainComponent = None  # type: ignore[assignment]
+        ReplyComponent = None  # type: ignore[assignment]
+        logger.warning(
+            "[checkin] 当前 AstrBot 未提供 At/Reply 消息段，"
+            "success_reply_style 的 at/quote 模式将退化为纯文本回复"
+        )
+
+
 try:  # 相对导入（作为包加载时）
     from .checkin_core import (
         BOARD_STREAK,
@@ -91,7 +113,53 @@ except ImportError:  # 绝对导入（AstrBot 以文件形式加载时）
     )
 
 PLUGIN_NAME = "astrbot_plugin_checkin"
-PLUGIN_VERSION = "1.1.0"
+PLUGIN_VERSION = "1.3.0"
+
+# 签到成功回复的呈现方式（配置项 success_reply_style）
+SUCCESS_STYLE_TEXT = "text"
+SUCCESS_STYLE_AT = "at"
+SUCCESS_STYLE_QUOTE = "quote"
+SUCCESS_STYLE_BOTH = "both"
+DEFAULT_SUCCESS_STYLE = SUCCESS_STYLE_TEXT
+
+# 允许的别名（大小写/空格/连字符不敏感），写错了统一收敛回 text
+SUCCESS_STYLE_ALIASES = {
+    "text": SUCCESS_STYLE_TEXT,
+    "plain": SUCCESS_STYLE_TEXT,
+    "none": SUCCESS_STYLE_TEXT,
+    "off": SUCCESS_STYLE_TEXT,
+    "close": SUCCESS_STYLE_TEXT,
+    "纯文本": SUCCESS_STYLE_TEXT,
+    "普通": SUCCESS_STYLE_TEXT,
+    "关闭": SUCCESS_STYLE_TEXT,
+    "at": SUCCESS_STYLE_AT,
+    "@": SUCCESS_STYLE_AT,
+    "mention": SUCCESS_STYLE_AT,
+    "at_only": SUCCESS_STYLE_AT,
+    "艾特": SUCCESS_STYLE_AT,
+    "quote": SUCCESS_STYLE_QUOTE,
+    "reply": SUCCESS_STYLE_QUOTE,
+    "quote_only": SUCCESS_STYLE_QUOTE,
+    "引用": SUCCESS_STYLE_QUOTE,
+    "回复": SUCCESS_STYLE_QUOTE,
+    "both": SUCCESS_STYLE_BOTH,
+    "at_quote": SUCCESS_STYLE_BOTH,
+    "quote_at": SUCCESS_STYLE_BOTH,
+    "at+quote": SUCCESS_STYLE_BOTH,
+    "quote+at": SUCCESS_STYLE_BOTH,
+    "all": SUCCESS_STYLE_BOTH,
+    "两个都要": SUCCESS_STYLE_BOTH,
+}
+
+
+def normalize_success_style(value: Any) -> str:
+    """把配置值收敛成 text / at / quote / both，非法值一律当 text（保持现状）。"""
+    raw = str(value or "").strip().lower().replace(" ", "").replace("　", "")
+    raw = raw.replace("-", "_")
+    if raw in SUCCESS_STYLE_ALIASES:
+        return SUCCESS_STYLE_ALIASES[raw]
+    raw2 = raw.replace("_", "+")
+    return SUCCESS_STYLE_ALIASES.get(raw2, DEFAULT_SUCCESS_STYLE)
 
 BOARD_LABEL = {BOARD_TODAY: "今日", BOARD_TOTAL: "总榜", BOARD_STREAK: "连签"}
 BOARD_UNIT = {BOARD_TODAY: "分", BOARD_TOTAL: "分", BOARD_STREAK: "天"}
@@ -314,12 +382,112 @@ class CheckinPlugin(Star):
         return f"{uid[:2]}***{uid[-2:]}"
 
     # ------------------------------------------------------------ 签到消息
+    @property
+    def _success_style(self) -> str:
+        """签到成功回复的呈现方式：text / at / quote / both（每次现读配置，改完即生效）。"""
+        return normalize_success_style(
+            self._cfg("success_reply_style", DEFAULT_SUCCESS_STYLE)
+        )
+
+    @staticmethod
+    def _message_id(event: AstrMessageEvent) -> Optional[Any]:
+        """取当前这条消息的消息 ID（引用回复要用它）。拿不到就返回 None。"""
+        for holder in (getattr(event, "message_obj", None), event):
+            if holder is None:
+                continue
+            try:
+                mid = getattr(holder, "message_id", None)
+            except Exception:
+                continue
+            if mid not in (None, ""):
+                return mid
+        return None
+
+    def _build_at_segment(self, event: AstrMessageEvent):
+        """构造 @发起人 的 At 段：带上真实 userid（event.get_sender_id()）。
+
+        与框架 ResultDecorateStage 的写法一致：At(qq=..., name=...)。
+        """
+        if AtComponent is None:
+            return None
+        uid, name = self._sender_meta(event)
+        if not uid or uid in ("unknown", "0"):
+            return None
+        try:
+            return AtComponent(qq=uid, name=name)
+        except Exception as exc:  # pragma: no cover - 平台/版本差异
+            logger.warning("[checkin] 构造 At 段失败，跳过 @: %s", exc)
+            return None
+
+    def _build_reply_segment(self, event: AstrMessageEvent):
+        """构造引用回复的 Reply 段：Reply(id=<被引用消息的 message_id>)。
+
+        与框架 ResultDecorateStage 的写法一致：Reply(id=event.message_obj.message_id)。
+        """
+        if ReplyComponent is None:
+            return None
+        mid = self._message_id(event)
+        if mid is None:
+            logger.debug("[checkin] 取不到 message_id，跳过引用回复")
+            return None
+        try:
+            return ReplyComponent(id=mid)
+        except Exception as exc:  # pragma: no cover - 平台/版本差异
+            logger.warning("[checkin] 构造 Reply 段失败，跳过引用: %s", exc)
+            return None
+
+    def _success_result(self, event: AstrMessageEvent, text: str):
+        """签到成功回复：按 success_reply_style 拼消息链，任何一步失败都回退纯文本。
+
+        链顺序对齐 OneBot v11 习惯：[Reply] [At] [Plain]。
+        """
+        plain_result = event.plain_result(text)
+        style = self._success_style
+        if style == SUCCESS_STYLE_TEXT or PlainComponent is None:
+            return plain_result
+        want_at = style in (SUCCESS_STYLE_AT, SUCCESS_STYLE_BOTH)
+        want_quote = style in (SUCCESS_STYLE_QUOTE, SUCCESS_STYLE_BOTH)
+
+        chain: list[Any] = []
+        if want_quote:
+            seg = self._build_reply_segment(event)
+            if seg is not None:
+                chain.append(seg)
+        if want_at:
+            seg = self._build_at_segment(event)
+            if seg is not None:
+                chain.append(seg)
+        if not chain:
+            return plain_result
+        try:
+            chain.append(PlainComponent(text=text))
+        except Exception as exc:  # pragma: no cover - 平台/版本差异
+            logger.warning("[checkin] 构造 Plain 段失败，回退纯文本: %s", exc)
+            return plain_result
+
+        builder = getattr(event, "chain_result", None)
+        if not callable(builder):
+            return plain_result
+        try:
+            return builder(chain)
+        except Exception as exc:  # pragma: no cover
+            logger.warning("[checkin] 构造消息链结果失败，回退纯文本: %s", exc)
+            return plain_result
+
+    def _result_for(self, event: AstrMessageEvent, text: str, ok: bool):
+        """成功回执走可配置的消息链，失败/重复签到的提示维持纯文本。"""
+        if ok:
+            return self._success_result(event, text)
+        return event.plain_result(text)
+
     def _format_success(self, res, scope: str, name: str = "") -> str:
         """签到成功只回一行核心反馈（文案由 checkin_core 渲染，方便配置与自测）。
 
         「少即是多」：不再追加“今日已有 N 人签到”等附加统计，避免刷屏。
+        @ 模式下昵称由 At 段承担，正文不再重复写一遍。
         """
-        return format_checkin_reply(self.settings, res, name)
+        include_name = self._success_style not in (SUCCESS_STYLE_AT, SUCCESS_STYLE_BOTH)
+        return format_checkin_reply(self.settings, res, name, include_name=include_name)
 
     def _format_already(self, stats, scope: str) -> str:
         total = self.store.day_count(scope)
@@ -330,37 +498,40 @@ class CheckinPlugin(Star):
             f"🔥 连签 {stats.effective_streak} 天 | 📊 累计 {stats.total_points} 分"
         )
 
-    async def _handle_checkin(self, event: AstrMessageEvent) -> Optional[str]:
+    async def _handle_checkin(self, event: AstrMessageEvent):
+        """执行签到。返回 (回复文本, 是否签到成功)；None 表示本群未启用、静默。"""
         self._refresh_settings()
         scope = self._scope(event)
         if scope is None:
-            return "签到失败：无法识别会话身份。"
+            return "签到失败：无法识别会话身份。", False
         if not self._group_allowed(scope):
             return None
         is_private = scope.startswith("private:")
         if is_private and not self._allow_private:
-            return "请在群聊里使用 /签到，或在插件配置中开启「允许私聊签到」。"
+            return "请在群聊里使用 /签到，或在插件配置中开启「允许私聊签到」。", False
 
         uid, name = self._sender_meta(event)
         try:
             res = await asyncio.to_thread(self.store.checkin, scope, uid, name, None)
-            return self._format_success(res, scope, name)
+            return self._format_success(res, scope, name), True
         except AlreadyCheckedIn:
             stats = await asyncio.to_thread(self.store.user_stats, scope, uid, None)
             logger.info("[checkin] 重复签到被拒 scope=%s user=%s", scope, self._mask(uid))
-            return self._format_already(stats, scope)
+            return self._format_already(stats, scope), False
         except CheckinError as exc:
-            return f"签到失败：{exc}"
+            return f"签到失败：{exc}", False
         except Exception as exc:
             logger.error("[checkin] 签到异常: %s", exc)
-            return "签到失败，请稍后再试。"
+            return "签到失败，请稍后再试。", False
 
     # ------------------------------------------------------------ 指令
     @filter.command("签到")
     async def cmd_checkin(self, event: AstrMessageEvent):
-        text = await self._handle_checkin(event)
-        if text:
-            yield event.plain_result(text)
+        outcome = await self._handle_checkin(event)
+        if outcome is None:
+            return
+        text, ok = outcome
+        yield self._result_for(event, text, ok)
 
     @filter.command("我的签到")
     async def cmd_my_checkin(self, event: AstrMessageEvent):
@@ -465,9 +636,11 @@ class CheckinPlugin(Star):
         normalized = raw.replace(" ", "").replace("\u3000", "")
         if normalized not in ("签到", "打卡"):
             return
-        text = await self._handle_checkin(event)
-        if text:
-            yield event.plain_result(text)
+        outcome = await self._handle_checkin(event)
+        if outcome is None:
+            return
+        text, ok = outcome
+        yield self._result_for(event, text, ok)
 
     # ------------------------------------------------------------ 图片排行榜
     def _render_rank_image(self, result):
