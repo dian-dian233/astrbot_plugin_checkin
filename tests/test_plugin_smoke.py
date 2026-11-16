@@ -26,6 +26,7 @@ def _install_astrbot_stubs() -> None:
     api = types.ModuleType("astrbot.api")
     event_mod = types.ModuleType("astrbot.api.event")
     star_mod = types.ModuleType("astrbot.api.star")
+    comp_mod = types.ModuleType("astrbot.api.message_components")
 
     def _passthrough_decorator(*args, **kwargs):
         def deco(func):
@@ -60,14 +61,45 @@ def _install_astrbot_stubs() -> None:
 
         return deco
 
+    # 消息段桩：字段/序列化与 astrbot.core.message.components 保持一致
+    class Plain:
+        def __init__(self, text: str = "", **kwargs):
+            self.type = "Plain"
+            self.text = text
+
+        def toDict(self):
+            return {"type": "text", "data": {"text": self.text}}
+
+    class At:
+        def __init__(self, qq=None, name: str = "", **kwargs):
+            self.type = "At"
+            self.qq = qq
+            self.name = name
+
+        def toDict(self):
+            return {"type": "at", "data": {"qq": str(self.qq)}}
+
+    class Reply:
+        def __init__(self, id=None, **kwargs):
+            self.type = "Reply"
+            self.id = id
+
+        def toDict(self):
+            return {"type": "reply", "data": {"id": str(self.id)}}
+
     event_mod.AstrMessageEvent = AstrMessageEvent
     event_mod.filter = fake_filter
     star_mod.Context = Context
     star_mod.Star = Star
     star_mod.register = register
 
+    comp_mod.Plain = Plain
+    comp_mod.At = At
+    comp_mod.Reply = Reply
+
     api.logger = logging.getLogger("astrbot.stub")
     api.llm_tool = _passthrough_decorator
+    api.message_components = comp_mod
 
     astrbot.api = api
     astrbot.api.event = event_mod
@@ -76,6 +108,7 @@ def _install_astrbot_stubs() -> None:
     sys.modules.setdefault("astrbot.api", api)
     sys.modules.setdefault("astrbot.api.event", event_mod)
     sys.modules.setdefault("astrbot.api.star", star_mod)
+    sys.modules.setdefault("astrbot.api.message_components", comp_mod)
 
 
 _install_astrbot_stubs()
@@ -83,16 +116,25 @@ _install_astrbot_stubs()
 import main as plugin_main  # noqa: E402
 
 
+class FakeMessageObj:
+    """够用的 AstrBotMessage 替身（只需要 message_id 供引用回复使用）。"""
+
+    def __init__(self, message_id="msg-1001", message_str=""):
+        self.message_id = message_id
+        self.message_str = message_str
+
+
 class FakeEvent:
     """够用的 AstrMessageEvent 替身。"""
 
     def __init__(self, text="", group_id="10001", sender_id="20002",
-                 sender_name="测试用户", admin=False):
+                 sender_name="测试用户", admin=False, message_id="msg-1001"):
         self.message_str = text
         self._group_id = group_id
         self._sender_id = sender_id
         self._sender_name = sender_name
         self._admin = admin
+        self.message_obj = FakeMessageObj(message_id, text)
 
     def get_group_id(self):
         return self._group_id
@@ -111,6 +153,9 @@ class FakeEvent:
 
     def image_result(self, path):
         return ("image", path)
+
+    def chain_result(self, chain):
+        return ("chain", chain)
 
 
 async def _collect(agen):
@@ -228,6 +273,139 @@ class TestCritReply(PluginCase):
     def test_crit_message_is_configurable(self):
         text = self.reply(self.plugin.cmd_checkin(FakeEvent("/签到")))
         self.assertNotIn("💥 暴击 ×10", text)
+
+
+class StyleCase(PluginCase):
+    """带 first_result 辅助方法的基类（本身不含用例，避免被各模式继承错配）。"""
+
+    config = {}
+
+    def first_result(self, agen):
+        results = run_agen(agen)
+        self.assertTrue(results, "指令没有产生任何回复")
+        return results[0]
+
+
+class TestSuccessReplyStyleDefault(StyleCase):
+    """success_reply_style 默认值与回退行为（默认保持现状：普通文本）。"""
+
+    def test_default_style_is_plain_text(self):
+        """默认（text）保持旧行为：plain_result，不带 At / Reply 段。"""
+        kind, payload = self.first_result(self.plugin.cmd_checkin(FakeEvent("/签到")))
+        self.assertEqual(kind, "plain")
+        self.assertIn("测试用户 签到成功", payload)
+        self.assertEqual(payload.count("\n"), 0)  # 仍然是一行
+
+    def test_non_success_reply_stays_plain(self):
+        """只有签到成功才加装饰，重复签到提示仍是纯文本。"""
+        run_agen(self.plugin.cmd_checkin(FakeEvent("/签到")))
+        kind, payload = self.first_result(self.plugin.cmd_checkin(FakeEvent("/签到")))
+        self.assertEqual(kind, "plain")
+        self.assertIn("已经签到过", payload)
+
+    def test_invalid_style_falls_back_to_text(self):
+        plugin = plugin_main.CheckinPlugin(
+            plugin_main.Context({}), {"success_reply_style": "火星模式"}
+        )
+        old, self.plugin = self.plugin, plugin
+        try:
+            kind, _payload = self.first_result(plugin.cmd_checkin(FakeEvent("/签到")))
+        finally:
+            self.plugin = old
+        self.assertEqual(kind, "plain")
+
+
+class TestSuccessReplyStyleAt(StyleCase):
+    config = {"success_reply_style": "at"}
+
+    def test_at_segment_carries_real_userid(self):
+        """At 段带的是 event.get_sender_id() 的真实 userid，不是纯文本昵称。"""
+        kind, chain = self.first_result(
+            self.plugin.cmd_checkin(FakeEvent("/签到", sender_id="20002", sender_name="阿一"))
+        )
+        self.assertEqual(kind, "chain")
+        self.assertEqual([seg.type for seg in chain], ["At", "Plain"])
+        at, plain = chain
+        self.assertEqual(str(at.qq), "20002")
+        self.assertEqual(at.name, "阿一")
+        self.assertEqual(at.toDict(), {"type": "at", "data": {"qq": "20002"}})
+
+    def test_at_mode_does_not_repeat_nickname(self):
+        """@ 已经把人点出来了，正文不再重复昵称，且依然只有一行。"""
+        _kind, chain = self.first_result(
+            self.plugin.cmd_checkin(FakeEvent("/签到", sender_name="阿一"))
+        )
+        text = chain[-1].text
+        self.assertIn("✅ 签到成功！", text)
+        self.assertNotIn("阿一 签到成功", text)
+        self.assertEqual(text.count("\n"), 0)
+
+    def test_keyword_trigger_also_decorated(self):
+        kind, chain = self.first_result(self.plugin.on_keyword(FakeEvent("签到")))
+        self.assertEqual(kind, "chain")
+        self.assertEqual(chain[0].type, "At")
+
+
+class TestSuccessReplyStyleQuote(StyleCase):
+    config = {"success_reply_style": "quote"}
+
+    def test_reply_segment_carries_message_id(self):
+        kind, chain = self.first_result(
+            self.plugin.cmd_checkin(FakeEvent("/签到", message_id="998877"))
+        )
+        self.assertEqual(kind, "chain")
+        self.assertEqual([seg.type for seg in chain], ["Reply", "Plain"])
+        reply, plain = chain
+        self.assertEqual(str(reply.id), "998877")
+        self.assertEqual(reply.toDict(), {"type": "reply", "data": {"id": "998877"}})
+        self.assertIn("测试用户 签到成功", plain.text)  # 没有 @，昵称保留
+
+    def test_missing_message_id_falls_back_to_text(self):
+        """拿不到 message_id 时不能抛异常，直接退回纯文本。"""
+        kind, payload = self.first_result(
+            self.plugin.cmd_checkin(FakeEvent("/签到", message_id=""))
+        )
+        self.assertEqual(kind, "plain")
+        self.assertIn("签到成功", payload)
+
+
+class TestSuccessReplyStyleBoth(StyleCase):
+    config = {"success_reply_style": "both"}
+
+    def test_chain_order_reply_at_plain(self):
+        """引用段在前、At 其次、正文最后（对齐 OneBot v11 习惯）。"""
+        kind, chain = self.first_result(
+            self.plugin.cmd_checkin(FakeEvent("/签到", sender_id="30003"))
+        )
+        self.assertEqual(kind, "chain")
+        self.assertEqual([seg.type for seg in chain], ["Reply", "At", "Plain"])
+        self.assertEqual(str(chain[0].id), "msg-1001")
+        self.assertEqual(str(chain[1].qq), "30003")
+
+
+class TestSuccessStyleNormalize(unittest.TestCase):
+    def test_aliases(self):
+        normalize = plugin_main.normalize_success_style
+        self.assertEqual(normalize(""), "text")
+        self.assertEqual(normalize(None), "text")
+        self.assertEqual(normalize("关闭"), "text")
+        self.assertEqual(normalize(" plain "), "text")
+        self.assertEqual(normalize("AT"), "at")
+        self.assertEqual(normalize("@"), "at")
+        self.assertEqual(normalize("艾特"), "at")
+        self.assertEqual(normalize("引用"), "quote")
+        self.assertEqual(normalize("Reply"), "quote")
+        self.assertEqual(normalize("at+quote"), "both")
+        self.assertEqual(normalize("at-quote"), "both")
+        self.assertEqual(normalize("火星"), "text")
+
+    def test_code_default_matches_schema(self):
+        with open(os.path.join(PLUGIN_DIR, "_conf_schema.json"), encoding="utf-8") as fp:
+            schema = json.load(fp)
+        item = schema["success_reply_style"]
+        self.assertEqual(item["type"], "string")
+        self.assertEqual(item["default"], plugin_main.DEFAULT_SUCCESS_STYLE)
+        self.assertEqual(item["options"], ["text", "at", "quote", "both"])
 
 
 class TestLlmTools(PluginCase):

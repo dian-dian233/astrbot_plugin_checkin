@@ -1073,19 +1073,26 @@ def render_crit_line(settings: Settings, result: CheckinResult) -> str:
 
 
 def format_checkin_reply(settings: Settings, result: CheckinResult,
-                         display_name: str = "") -> str:
+                         display_name: str = "", include_name: bool = True) -> str:
     """签到回执（纯文本，方便单测）。
 
     「少即是多」：整条回执压成一行 —— 签到成功 + 本次得分（暴击时附暴击文案）
     + 连签 + 累计积分。基础分/连签加成明细、首签奖励、今日排名等明细不再输出。
+
+    include_name=False 时省掉开头的昵称，供「@ 发起人」模式使用：
+    此时昵称已经由 At 消息段呈现，正文再带一遍会重复。
     """
     name = display_name or result.user_id
     if result.is_crit:
         gain = render_crit_line(settings, result)
     else:
         gain = "本次 +%d 分" % result.points
-    return "✅ %s 签到成功！%s｜🔥 连签 %d 天｜📈 累计 %d 分" % (
-        name, gain, result.streak, result.total_points)
+    if include_name:
+        head = "✅ %s 签到成功！" % name
+    else:
+        head = "✅ 签到成功！"
+    return "%s%s｜🔥 连签 %d 天｜📈 累计 %d 分" % (
+        head, gain, result.streak, result.total_points)
 
 
 def format_board(result: BoardResult, settings: Optional[Settings] = None) -> str:
